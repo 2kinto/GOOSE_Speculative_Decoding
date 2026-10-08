@@ -1,39 +1,78 @@
-# GOOSE: Anisotropic Speculation Trees for Training-Free Speculative Decoding
+# Goose: Anisotropic Speculation Trees for Training-Free Speculative Decoding
 
-Official repository for the COLM 2026 paper
-**"Goose: Anisotropic Speculation Trees for Training-Free Speculative Decoding"**
-Tao Jin, Phuong Minh Nguyen, Naoya Inoue — Japan Advanced Institute of Science and Technology (JAIST).
+Official implementation of the COLM 2026 paper *Goose: Anisotropic Speculation Trees for
+Training-Free Speculative Decoding* by Tao Jin, Phuong Minh Nguyen and Naoya Inoue.
 
-## About
+Goose is a training-free speculative decoding method. Context matching (as in prompt lookup
+decoding) drafts a deep spine, and an adjacency table built from the model's own logits
+(as in Token Recycling) adds branches along it. The target model verifies the whole tree
+in one forward pass.
 
-Speculative decoding organizes draft tokens as a tree, and a fixed verification budget forces a trade-off
-between depth (longer paths) and breadth (more fallbacks). Existing training-free methods draft from a
-single token source and shape their trees without distinguishing candidate quality across origins.
+![Goose overview](assets/overview.png)
 
-GOOSE starts from the observation that two common training-free sources differ sharply in acceptance rate:
-*n*-gram matches copied from the context are accepted 2–18× more often (median ≈6×) than statistical
-predictions recycled from prior forward passes. When such a gap exists, the optimal tree is **anisotropic** —
-reliable tokens form a deep **spine**, unreliable ones spread as wide **branches** at every spine node.
-The resulting tree provably accepts at least as many tokens per step as either source alone.
+## Installation
 
-Across five LLMs (7B–33B) and five benchmarks, GOOSE achieves **1.9–4.3× lossless speedup** and outperforms
-equal-budget isotropic trees by **12–33%**, with no training and no auxiliary draft model.
+```bash
+pip install -e .                 # decoder
+pip install -e ".[benchmarks]"   # decoder and dataset loaders
+```
 
-## Status
+## Usage
 
-**The code release is in preparation and will be published in this repository before the conference.**
-Watch or star this repository to be notified when it lands.
+```python
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from goose import decode
 
-Planned contents:
+name = "meta-llama/Meta-Llama-3-8B-Instruct"
+tokenizer = AutoTokenizer.from_pretrained(name)
+model = AutoModelForCausalLM.from_pretrained(
+    name, torch_dtype=torch.float16, device_map="auto",
+    attn_implementation="sdpa",  # or "eager"; tree verification needs a custom attention mask
+).eval()
 
-- the GOOSE decoder (spine-tree construction, tree-attention verification, adjacency table)
-- evaluation scripts for the five benchmarks reported in the paper
-- configuration files reproducing the main results
+input_ids = tokenizer("def quicksort(arr):", return_tensors="pt").input_ids.to(model.device)
+output, stats = decode(model, tokenizer, input_ids, max_new_tokens=512)
+
+print(tokenizer.decode(output[0]))
+print(f"{stats.compression_ratio:.2f} tokens per forward pass")
+```
+
+Hyperparameters are set with `goose.GooseConfig`, whose defaults follow the paper.
+
+## Benchmarks
+
+```bash
+# one model on one benchmark, against autoregressive decoding
+python benchmarks/run_benchmark.py --model llama3-8b --dataset humaneval \
+    --methods ar goose --stop-tokens tokenizer
+python benchmarks/summarize.py results
+
+# the paper's main grid: five models, five benchmarks
+bash benchmarks/run_paper_experiments.sh
+```
+
+`--stop-tokens tokenizer` applies the paper's stopping rule. Qwen3-8B is loaded in BF16 by
+default; add `--dtype float16` to match the paper. Results may differ slightly from those
+reported in the paper.
+
+## Tests
+
+```bash
+python -m pytest tests   # set GOOSE_TEST_MODEL=<model> to include end-to-end checks
+```
 
 ## Citation
 
-A BibTeX entry will be added here once the proceedings entry is final.
+```bibtex
+@inproceedings{jin2026goose,
+  title     = {Goose: Anisotropic Speculation Trees for Training-Free Speculative Decoding},
+  author    = {Jin, Tao and Nguyen, Phuong Minh and Inoue, Naoya},
+  booktitle = {Conference on Language Modeling (COLM)},
+  year      = {2026}
+}
+```
 
-## Contact
+## License
 
-Tao Jin — `morgan@jaist.ac.jp`
+MIT. Contact: Tao Jin (morgan@jaist.ac.jp).
